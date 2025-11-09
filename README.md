@@ -1,10 +1,11 @@
 # gnubgparser
 
-A Go package for parsing GNU Backgammon (gnuBG) match files in SGF (Smart Game Format) format.
+A Go package for parsing GNU Backgammon (gnuBG) and Jellyfish match files in SGF and MAT formats.
 
 ## Features
 
 - Parse gnuBG SGF match files
+- Parse Jellyfish MAT match files
 - Extract match metadata (players, event, date, score)
 - Parse game moves, cube decisions, and analysis
 - JSON export for easy integration with backends
@@ -37,6 +38,12 @@ func main() {
         log.Fatal(err)
     }
 
+    // OR parse MAT file
+    match, err = gnubgparser.ParseMATFile("match.mat")
+    if err != nil {
+        log.Fatal(err)
+    }
+
     // Access match data
     fmt.Printf("%s vs %s\n", match.Metadata.Player1, match.Metadata.Player2)
     fmt.Printf("Match length: %d\n", match.Metadata.MatchLength)
@@ -57,8 +64,12 @@ go build -o gnubgparser ./cmd/gnubgparser
 # Parse SGF file to JSON
 ./gnubgparser -format=json match.sgf > match.json
 
+# Parse MAT file to JSON
+./gnubgparser -format=json match.mat > match.json
+
 # Parse and display summary
 ./gnubgparser -format=summary match.sgf
+./gnubgparser -format=summary match.mat
 ```
 
 Example summary output:
@@ -80,7 +91,9 @@ Checker moves: 45
 Doubles: 1 (Takes: 1, Drops: 0)
 ```
 
-## SGF Format Support
+## Supported Formats
+
+### SGF Format (GNU Backgammon)
 
 This parser supports the gnuBG variant of SGF format (GM[6]) including:
 
@@ -93,6 +106,19 @@ This parser supports the gnuBG variant of SGF format (GM[6]) including:
 - **Double Analysis (DA)**: Cube decision analysis
 - **Statistics**: Luck, skill ratings, error analysis
 - **Board Positions (AE/AW/AB)**: Position setup
+
+### MAT Format (Jellyfish)
+
+This parser supports Jellyfish MAT (match) files including:
+
+- **Match Header**: Match length (point matches or money games)
+- **Game Headers**: Game number and scores
+- **Player Names**: Extracted from game headers
+- **Moves**: Dice rolls and move notation (e.g., "13/9 24/23")
+- **Cube Actions**: Doubles, takes, drops
+- **Game Results**: Winner and points won
+- **Metadata Comments**: EventDate, Event, Site, etc. (in comment lines)
+- **Point Notation**: Standard notation (1-24, bar, off)
 
 ## Data Structures
 

@@ -25,18 +25,33 @@ func main() {
 	flag.Parse()
 
 	if flag.NArg() < 1 {
-		fmt.Fprintf(os.Stderr, "Usage: %s [options] <file.sgf>\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Usage: %s [options] <file.sgf|file.mat>\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "\nOptions:\n")
 		flag.PrintDefaults()
+		fmt.Fprintf(os.Stderr, "\nSupported formats:\n")
+		fmt.Fprintf(os.Stderr, "  .sgf - GNU Backgammon SGF format\n")
+		fmt.Fprintf(os.Stderr, "  .mat - Jellyfish MAT format\n")
 		os.Exit(1)
 	}
 
 	filename := flag.Arg(0)
 
-	// Parse the SGF file
-	match, err := gnubgparser.ParseSGFFile(filename)
-	if err != nil {
-		log.Fatalf("Error parsing SGF file: %v\n", err)
+	// Determine file type and parse accordingly
+	var match *gnubgparser.Match
+	var err error
+
+	if len(filename) > 4 && filename[len(filename)-4:] == ".mat" {
+		// Parse MAT file
+		match, err = gnubgparser.ParseMATFile(filename)
+		if err != nil {
+			log.Fatalf("Error parsing MAT file: %v\n", err)
+		}
+	} else {
+		// Parse SGF file (default)
+		match, err = gnubgparser.ParseSGFFile(filename)
+		if err != nil {
+			log.Fatalf("Error parsing SGF file: %v\n", err)
+		}
 	}
 
 	// Output based on format

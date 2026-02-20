@@ -512,8 +512,41 @@ func parseEncodedMoveOption(encoded string, opt *MoveOption) {
 }
 
 // parseCubeAnalysis parses cube decision analysis (DA property)
-// Format: DA[rating ver version cubelevel cubedecision skill matchlength player1_win player2_win player2_gam player1_gam player1_bg equity ...]
-// Example: DA[E ver 3 2C 1 0.000000 1 0.503635 0.135264 0.005951 0.140890 0.006297 0.001137 ...]
+//
+// GNUbg DA property format (21 fields for cube analysis):
+//
+//	DA[rating ver version cubelevel bestaction skill matchlength
+//	    p_win p_wingammon p_winbg p_losegammon p_losebg cubeless_equity cubeful_nd_equity
+//	    p_win p_wingammon p_winbg p_losegammon p_losebg cubeless_equity cubeful_dt_equity]
+//
+// Field indices (0-based after splitting):
+//
+//	[0]  = skill rating (E, G, etc)
+//	[1]  = "ver"
+//	[2]  = version number (analysis depth / ply)
+//	[3]  = cube level (e.g., "2C")
+//	[4]  = best cube action index
+//	[5]  = error value
+//	[6]  = match length
+//	[7]  = P(player wins)
+//	[8]  = P(player wins gammon)
+//	[9]  = P(player wins backgammon)
+//	[10] = P(opponent wins gammon)
+//	[11] = P(opponent wins backgammon)
+//	[12] = cubeless equity (EMG)
+//	[13] = cubeful no-double equity
+//	[14-18] = same probabilities repeated
+//	[19] = same cubeless equity repeated
+//	[20] = cubeful double/take equity
+//
+// Note: In match play, cubeful equities are Match Winning Chances (MWC, 0.0-1.0).
+// Double/Pass equity is not stored in the DA property; it equals 1.0 for money games,
+// or must be computed from the match equity table for match play.
+//
+// Probability fields follow GNUbg's eval.h output order:
+//
+//	OUTPUT_WIN=0, OUTPUT_WINGAMMON=1, OUTPUT_WINBACKGAMMON=2,
+//	OUTPUT_LOSEGAMMON=3, OUTPUT_LOSEBACKGAMMON=4
 func parseCubeAnalysis(node *SGFNode, mr *MoveRecord) {
 	daStrs := node.Properties["DA"]
 	if len(daStrs) == 0 {
@@ -527,47 +560,64 @@ func parseCubeAnalysis(node *SGFNode, mr *MoveRecord) {
 
 	ca := &CubeAnalysis{}
 
-	// parts[0] = rating (E, G, etc)
-	// parts[1] = "ver"
-	// parts[2] = version number
-	// parts[3] = cube level (like "2C")
-	// parts[4] = ? (often 1)
-	// parts[5] = skill value (often 0.000000)
-	// parts[6] = match length (often 1)
+	// Probabilities at indices 7-11 (GNUbg eval.h order):
+	//   [7]  = P(player wins)
+	//   [8]  = P(player wins gammon)
+	//   [9]  = P(player wins backgammon)
+	//   [10] = P(opponent wins gammon)
+	//   [11] = P(opponent wins backgammon)
+	pWin, _ := parseFloat32(parts[7])
+	pWinGammon, _ := parseFloat32(parts[8])
+	pWinBG, _ := parseFloat32(parts[9])
+	pLoseGammon, _ := parseFloat32(parts[10])
+	pLoseBG, _ := parseFloat32(parts[11])
 
-	// Probabilities start at index 7
-	ca.Player1WinRate, _ = parseFloat32(parts[7])
-	ca.Player2WinRate, _ = parseFloat32(parts[8])
-	ca.Player2GammonRate, _ = parseFloat32(parts[9])
-	ca.Player1GammonRate, _ = parseFloat32(parts[10])
-	ca.Player1BackgammonRate, _ = parseFloat32(parts[11])
+	ca.Player1WinRate = pWin
+	ca.Player1GammonRate = pWinGammon
+	ca.Player1BackgammonRate = pWinBG
+	ca.Player2WinRate = 1.0 - pWin // Opponent win rate = 1 - player win rate
+	ca.Player2GammonRate = pLoseGammon
+	ca.Player2BackgammonRate = pLoseBG
 
-	// Equity at index 12
+	// Cubeless equity at index 12
 	ca.CubelessEquity, _ = strconv.ParseFloat(parts[12], 64)
 
-	// Additional equities might follow
-	if len(parts) >= 16 {
+	// Cubeful No-Double equity at index 13
+	if len(parts) >= 14 {
 		ca.CubefulNoDouble, _ = strconv.ParseFloat(parts[13], 64)
-		// The remaining values appear to repeat the probabilities and show cubeful equities
-		// but the exact format needs more investigation
 	}
+
+	// Cubeful Double/Take equity at index 20 (second set's cubeful equity)
+	if len(parts) >= 21 {
+		ca.CubefulDoubleTake, _ = strconv.ParseFloat(parts[20], 64)
+	}
+
+	// Double/Pass equity: +1.0 for money games (normalized per cube value).
+	// For match play, this should ideally be computed from the match equity table,
+	// but +1.0 is the standard GNUbg convention for the DA property.
+	ca.CubefulDoublePass = 1.0
 
 	// Set analysis depth from parts[2] if it's numeric
 	ca.AnalysisDepth, _ = strconv.Atoi(parts[2])
 
-	// Determine best action
-	if mr.Type == MoveTypeDouble {
-		if ca.CubefulDoubleTake > ca.CubefulNoDouble {
-			ca.BestAction = "double"
+	// Determine best action based on equity comparison:
+	// - Effective double equity = min(DT, DP) (opponent's optimal response)
+	// - If effective double > ND → double is correct
+	// - Then opponent decides: if DT ≤ DP → take, else pass
+	effectiveDouble := ca.CubefulDoubleTake
+	if ca.CubefulDoublePass < ca.CubefulDoubleTake {
+		effectiveDouble = ca.CubefulDoublePass
+	}
+
+	if effectiveDouble > ca.CubefulNoDouble {
+		// Doubling is correct
+		if ca.CubefulDoubleTake <= ca.CubefulDoublePass {
+			ca.BestAction = "Double, Take"
 		} else {
-			ca.BestAction = "no_double"
+			ca.BestAction = "Double, Pass"
 		}
-	} else if mr.Type == MoveTypeTake || mr.Type == MoveTypeDrop {
-		if ca.CubefulDoubleTake > ca.CubefulDoublePass {
-			ca.BestAction = "take"
-		} else {
-			ca.BestAction = "pass"
-		}
+	} else {
+		ca.BestAction = "No Double"
 	}
 
 	mr.CubeAnalysis = ca

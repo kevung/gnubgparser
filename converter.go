@@ -102,7 +102,10 @@ func extractMetadata(node *SGFNode, match *Match, game *Game) error {
 	}
 
 	// Match info (MI property)
-	if mi := getProperty(node, "MI"); mi != "" {
+	// MI is stored as multiple values: MI[length:7][game:0][ws:0][bs:0]
+	// Need to join all values since getProperty only returns the first one
+	if values, ok := node.Properties["MI"]; ok && len(values) > 0 {
+		mi := strings.Join(values, "][")
 		parseMatchInfo(mi, match, game)
 	}
 
@@ -600,25 +603,10 @@ func parseCubeAnalysis(node *SGFNode, mr *MoveRecord) {
 	// Set analysis depth from parts[2] if it's numeric
 	ca.AnalysisDepth, _ = strconv.Atoi(parts[2])
 
-	// Determine best action based on equity comparison:
-	// - Effective double equity = min(DT, DP) (opponent's optimal response)
-	// - If effective double > ND → double is correct
-	// - Then opponent decides: if DT ≤ DP → take, else pass
-	effectiveDouble := ca.CubefulDoubleTake
-	if ca.CubefulDoublePass < ca.CubefulDoubleTake {
-		effectiveDouble = ca.CubefulDoublePass
-	}
-
-	if effectiveDouble > ca.CubefulNoDouble {
-		// Doubling is correct
-		if ca.CubefulDoubleTake <= ca.CubefulDoublePass {
-			ca.BestAction = "Double, Take"
-		} else {
-			ca.BestAction = "Double, Pass"
-		}
-	} else {
-		ca.BestAction = "No Double"
-	}
+	// BestAction is NOT computed here because in match play the cubeful equities
+	// (ND and DT) are stored as MWC (Match Winning Chances, 0.0-1.0) while DP is
+	// set to 1.0 (EMG convention). Comparing MWC with EMG gives wrong results.
+	// The consumer (e.g., blunderDB) should convert MWC→EMG first, then compute BestAction.
 
 	mr.CubeAnalysis = ca
 }

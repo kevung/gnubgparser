@@ -12,8 +12,10 @@ import (
 
 // MATParser handles parsing of Jellyfish .mat files
 type MATParser struct {
-	scanner *bufio.Scanner
-	lineNum int
+	scanner    *bufio.Scanner
+	lineNum    int
+	peekedLine string
+	hasPeeked  bool
 }
 
 // NewMATParser creates a new MAT parser from a reader
@@ -21,6 +23,27 @@ func NewMATParser(r io.Reader) *MATParser {
 	return &MATParser{
 		scanner: bufio.NewScanner(r),
 	}
+}
+
+// nextLine returns the next line, using the peeked line if available.
+func (p *MATParser) nextLine() (string, bool) {
+	if p.hasPeeked {
+		p.hasPeeked = false
+		p.lineNum++
+		return p.peekedLine, true
+	}
+	if p.scanner.Scan() {
+		p.lineNum++
+		return p.scanner.Text(), true
+	}
+	return "", false
+}
+
+// unreadLine pushes a line back so the next call to nextLine returns it.
+func (p *MATParser) unreadLine(line string) {
+	p.peekedLine = line
+	p.hasPeeked = true
+	p.lineNum-- // will be re-incremented on next read
 }
 
 // ParseMATFile parses a .mat file and returns a Match
@@ -52,7 +75,9 @@ var (
 	scoreLineRe = regexp.MustCompile(`^\s*(\S+.*?)\s*:\s*(\d+)\s+(\S+.*?)\s*:\s*(\d+)\s*$`)
 
 	// Move line: "  1) 31: 6/5 8/5" or "  1)                             41: 13/9 24/23"
-	moveLineRe = regexp.MustCompile(`^\s*(\d+)\)\s*(.*)$`)
+	// Note: Do NOT use \s* after ) — the leading whitespace is needed by splitMoveLine
+	// to detect whether the left column is empty (3+ spaces = column separator).
+	moveLineRe = regexp.MustCompile(`^\s*(\d+)\)(.*)$`)
 
 	// Comment line starting with ; or #
 	commentLineRe = regexp.MustCompile(`^\s*[;#]\s*(.*)$`)
@@ -66,8 +91,8 @@ var (
 	siteRe        = regexp.MustCompile(`\[Site\s+"([^"]+)"\]`)
 	transcriberRe = regexp.MustCompile(`\[Transcriber\s+"([^"]+)"\]`)
 
-	// Wins line: "                                  Wins 2 points"
-	winsLineRe = regexp.MustCompile(`^\s*Wins\s+(\d+)\s+points?\s*$`)
+	// Wins line: "                                  Wins 2 points" or "Wins 2 points and the match"
+	winsLineRe = regexp.MustCompile(`^\s*Wins\s+(\d+)\s+points?(?:\s+and\s+the\s+match)?\s*$`)
 
 	// Dice and move: "31: 6/5 8/5" or "41: 13/9 24/23"
 	diceAndMoveRe = regexp.MustCompile(`^(\d)(\d):\s*(.*)$`)
@@ -87,9 +112,11 @@ func (p *MATParser) parse() (*Match, error) {
 
 	// Parse comments and match header
 	matchLength := 0
-	for p.scanner.Scan() {
-		p.lineNum++
-		line := p.scanner.Text()
+	for {
+		line, ok := p.nextLine()
+		if !ok {
+			break
+		}
 
 		// Check for comments with metadata
 		if matches := commentLineRe.FindStringSubmatch(line); matches != nil {
@@ -106,7 +133,7 @@ func (p *MATParser) parse() (*Match, error) {
 		}
 	}
 
-	if matchLength == 0 && !p.scanner.Scan() {
+	if matchLength == 0 {
 		return nil, fmt.Errorf("invalid MAT file: no match header found")
 	}
 
@@ -153,9 +180,11 @@ func (p *MATParser) parseMetadataComment(match *Match, comment string) {
 func (p *MATParser) parseGame(matchLength int, match *Match) (*Game, error) {
 	// Find game header
 	var gameNumber int
-	for p.scanner.Scan() {
-		p.lineNum++
-		line := p.scanner.Text()
+	for {
+		line, ok := p.nextLine()
+		if !ok {
+			break
+		}
 
 		if matches := gameHeaderRe.FindStringSubmatch(line); matches != nil {
 			num, _ := strconv.Atoi(matches[1])
@@ -169,11 +198,10 @@ func (p *MATParser) parseGame(matchLength int, match *Match) (*Game, error) {
 	}
 
 	// Parse score line
-	if !p.scanner.Scan() {
+	scoreLine, ok := p.nextLine()
+	if !ok {
 		return nil, io.EOF
 	}
-	p.lineNum++
-	scoreLine := p.scanner.Text()
 
 	matches := scoreLineRe.FindStringSubmatch(scoreLine)
 	if matches == nil {
@@ -218,12 +246,16 @@ func (p *MATParser) parseGame(matchLength int, match *Match) (*Game, error) {
 	currentPlayer := 1 // Start with player 2 (1-indexed in MAT format)
 	cubeValue := 1
 	_ = cubeValue // Will be used for cube tracking in future
+	gameEnded := false
 
-	for p.scanner.Scan() {
-		p.lineNum++
-		line := p.scanner.Text()
+	for {
+		line, ok := p.nextLine()
+		if !ok {
+			break
+		}
 
 		// Check for wins line (end of game)
+		// "Wins" can appear standalone or on the right side of a move line
 		if matches := winsLineRe.FindStringSubmatch(line); matches != nil {
 			points, _ := strconv.Atoi(matches[1])
 			game.Points = points
@@ -236,10 +268,9 @@ func (p *MATParser) parseGame(matchLength int, match *Match) (*Game, error) {
 			continue
 		}
 
-		// Check for next game starting
+		// Check for next game starting - unread the line so the next parseGame finds it
 		if gameHeaderRe.MatchString(line) {
-			// Put the line back for the next game parse
-			// (We can't really unread, so we'll handle this in the main loop)
+			p.unreadLine(line)
 			break
 		}
 
@@ -257,6 +288,15 @@ func (p *MATParser) parseGame(matchLength int, match *Match) (*Game, error) {
 				}
 
 				player := i // 0 = player1, 1 = player2
+
+				// Check for "Wins N point(s)" on a column (e.g., right side of a move line)
+				if wm := winsLineRe.FindStringSubmatch(part); wm != nil {
+					points, _ := strconv.Atoi(wm[1])
+					game.Points = points
+					game.Winner = player
+					gameEnded = true
+					break
+				}
 
 				// Check for cube actions first (they don't have dice)
 				if matches := doublesRe.FindStringSubmatch(part); matches != nil {
@@ -291,6 +331,7 @@ func (p *MATParser) parseGame(matchLength int, match *Match) (*Game, error) {
 					// Game ends on a drop
 					game.Winner = 1 - player
 					currentPlayer = 1 - player
+					gameEnded = true
 					break
 				}
 
@@ -317,6 +358,10 @@ func (p *MATParser) parseGame(matchLength int, match *Match) (*Game, error) {
 					currentPlayer = player
 				}
 			}
+		}
+
+		if gameEnded {
+			break
 		}
 	}
 
@@ -346,11 +391,13 @@ func splitMoveLine(line string) [2]string {
 }
 
 // parseMatMove converts MAT move notation to internal format
-// MAT format: "6/5 8/5" or "13/9 24/23" or "bar/23"
+// MAT format: "6/5 8/5" or "13/9 24/23" or "bar/23" or "18/16(2) 6/4(2)"
+// The (N) suffix means the movement is repeated N times
 func parseMatMove(moveStr string) [8]int {
 	move := [8]int{-1, -1, -1, -1, -1, -1, -1, -1}
 
-	if moveStr == "" || strings.Contains(strings.ToLower(moveStr), "can't move") {
+	if moveStr == "" || strings.Contains(strings.ToLower(moveStr), "can't move") ||
+		strings.Contains(strings.ToLower(moveStr), "cannot move") {
 		return move
 	}
 
@@ -363,8 +410,22 @@ func parseMatMove(moveStr string) [8]int {
 			break
 		}
 
+		// Check for multiplier (N) suffix, e.g., "18/16(2)"
+		multiplier := 1
+		cleanPart := part
+		if parenIdx := strings.LastIndex(part, "("); parenIdx >= 0 {
+			if closeIdx := strings.Index(part[parenIdx:], ")"); closeIdx >= 0 {
+				nStr := part[parenIdx+1 : parenIdx+closeIdx]
+				if n, err := strconv.Atoi(nStr); err == nil && n > 0 {
+					multiplier = n
+				}
+				// Remove the (N) suffix from the part for parsing
+				cleanPart = part[:parenIdx]
+			}
+		}
+
 		// Parse "from/to" format
-		moveparts := strings.Split(part, "/")
+		moveparts := strings.Split(cleanPart, "/")
 		if len(moveparts) != 2 {
 			continue
 		}
@@ -373,9 +434,11 @@ func parseMatMove(moveStr string) [8]int {
 		to := parseMatPoint(moveparts[1])
 
 		if from >= 0 && to >= -1 {
-			move[idx] = from
-			move[idx+1] = to
-			idx += 2
+			for r := 0; r < multiplier && idx < 8; r++ {
+				move[idx] = from
+				move[idx+1] = to
+				idx += 2
+			}
 		}
 	}
 
@@ -384,9 +447,15 @@ func parseMatMove(moveStr string) [8]int {
 
 // parseMatPoint converts a MAT point notation to internal format
 // MAT uses: 1-24 for points, "bar" for bar, "off" for off
+// May have suffixes like "*" (hit) or "(N)" (multiplier) which are stripped
 func parseMatPoint(s string) int {
 	s = strings.TrimSpace(s)
 	s = strings.TrimSuffix(s, "*") // Remove hit marker
+
+	// Remove "(N)" multiplier suffix (e.g., "16(2)" → "16")
+	if idx := strings.Index(s, "("); idx >= 0 {
+		s = s[:idx]
+	}
 
 	// Check for special points
 	lower := strings.ToLower(s)

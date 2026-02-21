@@ -202,6 +202,26 @@ func TestParseMatMove(t *testing.T) {
 			input:    "",
 			expected: [8]int{-1, -1, -1, -1, -1, -1, -1, -1},
 		},
+		{
+			input:    "18/16(2) 6/4(2)",
+			expected: [8]int{17, 15, 17, 15, 5, 3, 5, 3}, // 18/16 twice + 6/4 twice
+		},
+		{
+			input:    "24/20(2)",
+			expected: [8]int{23, 19, 23, 19, -1, -1, -1, -1}, // 24/20 twice
+		},
+		{
+			input:    "6/off(2)",
+			expected: [8]int{5, -1, 5, -1, -1, -1, -1, -1}, // bear off two from 6-point
+		},
+		{
+			input:    "Cannot Move",
+			expected: [8]int{-1, -1, -1, -1, -1, -1, -1, -1},
+		},
+		{
+			input:    "Can't Move",
+			expected: [8]int{-1, -1, -1, -1, -1, -1, -1, -1},
+		},
 	}
 
 	for _, tt := range tests {
@@ -226,6 +246,8 @@ func TestParseMatPoint(t *testing.T) {
 		{"off", -1},
 		{"Off", -1},
 		{"13*", 12}, // Hit marker should be stripped
+		{"16(2)", 15}, // Multiplier suffix should be stripped
+		{"4(3)", 3},   // Multiplier suffix should be stripped
 		{"invalid", -2},
 	}
 

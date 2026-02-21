@@ -2,6 +2,7 @@ package gnubgparser
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -254,5 +255,102 @@ func TestFormatMove(t *testing.T) {
 				t.Errorf("FormatMove() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCannotMoveSGF(t *testing.T) {
+	// Test that a dice-only move (no encoded move) is treated as "Cannot Move"
+	// In GnuBG SGF, ";B[31]" means player rolled 3-1 but had no legal moves
+	sgf := `(;FF[4]GM[6]AP[GNU Backgammon:1.06.002]MI[length:7][game:0][ws:0][bs:0]
+;B[31]LU[-0.05]
+)`
+	match, err := ParseSGF(strings.NewReader(sgf))
+	if err != nil {
+		t.Fatalf("ParseSGF failed: %v", err)
+	}
+
+	if len(match.Games) == 0 {
+		t.Fatal("No games parsed")
+	}
+	game := match.Games[0]
+
+	// Find the normal move
+	var cannotMove *MoveRecord
+	for i := range game.Moves {
+		if game.Moves[i].Type == MoveTypeNormal {
+			cannotMove = &game.Moves[i]
+			break
+		}
+	}
+	if cannotMove == nil {
+		t.Fatal("No normal move found")
+	}
+
+	// Check Move array is all -1
+	expectedMove := [8]int{-1, -1, -1, -1, -1, -1, -1, -1}
+	if cannotMove.Move != expectedMove {
+		t.Errorf("Move = %v, want %v", cannotMove.Move, expectedMove)
+	}
+
+	// Check MoveString
+	if cannotMove.MoveString != "Cannot Move" {
+		t.Errorf("MoveString = %q, want %q", cannotMove.MoveString, "Cannot Move")
+	}
+
+	// Check dice are still parsed
+	if cannotMove.Dice[0] != 3 || cannotMove.Dice[1] != 1 {
+		t.Errorf("Dice = %v, want [3, 1]", cannotMove.Dice)
+	}
+}
+
+func TestCannotMoveWithCubeAnalysis(t *testing.T) {
+	// Test that "Cannot Move" with DA property gets a synthetic checker analysis
+	sgf := `(;FF[4]GM[6]AP[GNU Backgammon:1.06.002]MI[length:7][game:0][ws:0][bs:0]
+;B[64]DA[E ver 3 2C 1 0.000000 1 0.216329 0.021271 0.000813 0.258145 0.003613 -0.811862 0.438793 0.216329 0.021271 0.000813 0.258145 0.003613 -0.811862 0.375440]LU[-0.06810]
+)`
+	match, err := ParseSGF(strings.NewReader(sgf))
+	if err != nil {
+		t.Fatalf("ParseSGF failed: %v", err)
+	}
+
+	if len(match.Games) == 0 {
+		t.Fatal("No games parsed")
+	}
+	game := match.Games[0]
+
+	var cannotMove *MoveRecord
+	for i := range game.Moves {
+		if game.Moves[i].Type == MoveTypeNormal {
+			cannotMove = &game.Moves[i]
+			break
+		}
+	}
+	if cannotMove == nil {
+		t.Fatal("No normal move found")
+	}
+
+	if cannotMove.MoveString != "Cannot Move" {
+		t.Errorf("MoveString = %q, want %q", cannotMove.MoveString, "Cannot Move")
+	}
+
+	// Should have synthetic checker analysis from DA data
+	if cannotMove.Analysis == nil {
+		t.Fatal("Analysis is nil; expected synthetic analysis from DA property")
+	}
+	if len(cannotMove.Analysis.Moves) != 1 {
+		t.Fatalf("Analysis.Moves has %d entries, want 1", len(cannotMove.Analysis.Moves))
+	}
+
+	opt := cannotMove.Analysis.Moves[0]
+	if opt.MoveString != "Cannot Move" {
+		t.Errorf("Analysis move string = %q, want %q", opt.MoveString, "Cannot Move")
+	}
+
+	// Verify win rates from DA property
+	if opt.Player1WinRate < 0.21 || opt.Player1WinRate > 0.22 {
+		t.Errorf("Player1WinRate = %f, expected ~0.216329", opt.Player1WinRate)
+	}
+	if opt.Equity < -0.82 || opt.Equity > -0.80 {
+		t.Errorf("Equity = %f, expected ~-0.811862", opt.Equity)
 	}
 }

@@ -313,6 +313,13 @@ func processMove(node *SGFNode, game *Game, player int, moveStr string, comment 
 			// Parse encoded move
 			if len(moveStr) > 2 {
 				parseEncodedMove(moveStr[2:], &mr)
+			} else {
+				// No encoded move after dice: player cannot move
+				// Initialize Move to all -1 (same convention as XG/MAT)
+				for i := range mr.Move {
+					mr.Move[i] = -1
+				}
+				mr.MoveString = "Cannot Move"
 			}
 		}
 	}
@@ -335,6 +342,30 @@ func processMove(node *SGFNode, game *Game, player int, moveStr string, comment 
 	// Parse skill (SK property)
 	if hasProperty(node, "SK") {
 		parseSkill(node, &mr)
+	}
+
+	// For "Cannot Move" positions: if we have cube analysis (DA) but no checker
+	// analysis (A), synthesize a single-entry checker analysis from the DA data.
+	// This matches the XG behavior where "Cannot Move" positions display
+	// evaluation data (win rates, equity) in the checker analysis.
+	if mr.MoveString == "Cannot Move" && mr.Analysis == nil && mr.CubeAnalysis != nil {
+		mr.Analysis = &MoveAnalysis{
+			Moves: []MoveOption{
+				{
+					Move:                  [8]int{-1, -1, -1, -1, -1, -1, -1, -1},
+					MoveString:            "Cannot Move",
+					Equity:                mr.CubeAnalysis.CubelessEquity,
+					Player1WinRate:        mr.CubeAnalysis.Player1WinRate,
+					Player1GammonRate:     mr.CubeAnalysis.Player1GammonRate,
+					Player1BackgammonRate: mr.CubeAnalysis.Player1BackgammonRate,
+					Player2WinRate:        mr.CubeAnalysis.Player2WinRate,
+					Player2GammonRate:     mr.CubeAnalysis.Player2GammonRate,
+					Player2BackgammonRate: mr.CubeAnalysis.Player2BackgammonRate,
+					AnalysisDepth:         mr.CubeAnalysis.AnalysisDepth,
+				},
+			},
+			SelectedMove: 0,
+		}
 	}
 
 	game.Moves = append(game.Moves, mr)

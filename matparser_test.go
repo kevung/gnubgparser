@@ -245,7 +245,7 @@ func TestParseMatPoint(t *testing.T) {
 		{"Bar", 24},
 		{"off", -1},
 		{"Off", -1},
-		{"13*", 12}, // Hit marker should be stripped
+		{"13*", 12},   // Hit marker should be stripped
 		{"16(2)", 15}, // Multiplier suffix should be stripped
 		{"4(3)", 3},   // Multiplier suffix should be stripped
 		{"invalid", -2},

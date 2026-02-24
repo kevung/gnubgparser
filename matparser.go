@@ -346,12 +346,7 @@ func (p *MATParser) parseGame(matchLength int, match *Match) (*Game, error) {
 						Player:     player,
 						Dice:       [2]int{die1, die2},
 						MoveString: moveStr,
-					}
-
-					// Parse the move notation if present
-					if moveStr != "" {
-						moveArray := parseMatMove(moveStr)
-						move.Move = moveArray
+						Move:       parseMatMove(moveStr), // Always parse; empty string returns all -1 (no move)
 					}
 
 					game.Moves = append(game.Moves, move)
@@ -369,24 +364,59 @@ func (p *MATParser) parseGame(matchLength int, match *Match) (*Game, error) {
 }
 
 // splitMoveLine splits a move line into left (player1) and right (player2) parts
-// MAT format uses multiple spaces (typically 3+) to separate the two player columns
+// MAT format uses multiple spaces (typically 3+) to separate the two player columns.
+// When the left column has a long move (e.g., 4-submove doubles like "66: 22/16 22/16 16/10 16/10"),
+// only 1-2 spaces may separate the columns. In that case, we fall back to detecting
+// a second dice pattern (NN:) which marks the start of the right column.
 func splitMoveLine(line string) [2]string {
 	var result [2]string
 
 	// Look for a sequence of 3 or more spaces that separates the two moves
-	// This is more robust than using a fixed column number
 	re := regexp.MustCompile(`\s{3,}`)
 	loc := re.FindStringIndex(line)
 
 	if loc != nil {
-		// Found a large gap - split here
-		result[0] = strings.TrimSpace(line[:loc[0]])
-		result[1] = strings.TrimSpace(line[loc[1]:])
-	} else {
-		// No large gap found, entire line is one column
-		result[0] = strings.TrimSpace(line)
+		left := strings.TrimSpace(line[:loc[0]])
+		right := strings.TrimSpace(line[loc[1]:])
+
+		if right != "" {
+			// Clean split with non-empty right side
+			result[0] = left
+			result[1] = right
+			return result
+		}
+		// Right side is empty (gap was trailing spaces) — fall through to secondary detection
 	}
 
+	// Fallback: look for a second dice pattern (NN:) in the content.
+	// The first NN: is at the start of the line (left player's dice).
+	// Any subsequent NN: preceded by whitespace marks the right player's column.
+	trimmed := strings.TrimSpace(line)
+	secondDiceRe := regexp.MustCompile(`\s(\d\d:\s*)`)
+	allMatches := secondDiceRe.FindAllStringIndex(trimmed, -1)
+
+	if len(allMatches) >= 1 {
+		// Split at the space before the second dice pattern
+		splitPos := allMatches[0][0]
+		result[0] = strings.TrimSpace(trimmed[:splitPos])
+		result[1] = strings.TrimSpace(trimmed[splitPos:])
+		return result
+	}
+
+	// Also check for cube actions after a move: detect "Doubles", "Takes", "Drops"
+	// following a dice+move pattern
+	if len(allMatches) >= 1 {
+		cubeRe := regexp.MustCompile(`\s+(Doubles|Takes|Drops)`)
+		cubeLoc := cubeRe.FindStringIndex(trimmed)
+		if cubeLoc != nil && cubeLoc[0] > allMatches[0][0] {
+			result[0] = strings.TrimSpace(trimmed[:cubeLoc[0]])
+			result[1] = strings.TrimSpace(trimmed[cubeLoc[0]:])
+			return result
+		}
+	}
+
+	// No large gap and no second dice pattern — entire line is one column
+	result[0] = strings.TrimSpace(line)
 	return result
 }
 
@@ -446,7 +476,7 @@ func parseMatMove(moveStr string) [8]int {
 }
 
 // parseMatPoint converts a MAT point notation to internal format
-// MAT uses: 1-24 for points, "bar" for bar, "off" for off
+// MAT uses: 1-24 for points, "bar" or 25 for bar, "off" or 0 for off
 // May have suffixes like "*" (hit) or "(N)" (multiplier) which are stripped
 func parseMatPoint(s string) int {
 	s = strings.TrimSpace(s)
@@ -457,7 +487,7 @@ func parseMatPoint(s string) int {
 		s = s[:idx]
 	}
 
-	// Check for special points
+	// Check for special points (text form, used in TXT format)
 	lower := strings.ToLower(s)
 	if lower == "bar" {
 		return 24 // bar
@@ -470,6 +500,14 @@ func parseMatPoint(s string) int {
 	point, err := strconv.Atoi(s)
 	if err != nil {
 		return -2 // invalid
+	}
+
+	// MAT format uses 0 for bearoff and 25 for bar (numeric equivalents)
+	if point == 0 {
+		return -1 // off (bearoff)
+	}
+	if point == 25 {
+		return 24 // bar
 	}
 
 	// Convert from MAT format (1-24) to internal format (0-23)

@@ -222,6 +222,18 @@ func TestParseMatMove(t *testing.T) {
 			input:    "Can't Move",
 			expected: [8]int{-1, -1, -1, -1, -1, -1, -1, -1},
 		},
+		{
+			input:    "25/23 25/24",
+			expected: [8]int{24, 22, 24, 23, -1, -1, -1, -1}, // Numeric bar entry
+		},
+		{
+			input:    "3/0 1/0",
+			expected: [8]int{2, -1, 0, -1, -1, -1, -1, -1}, // Numeric bearoff
+		},
+		{
+			input:    "5/0 5/0 5/0 5/0",
+			expected: [8]int{4, -1, 4, -1, 4, -1, 4, -1}, // Four bearoffs
+		},
 	}
 
 	for _, tt := range tests {
@@ -243,8 +255,10 @@ func TestParseMatPoint(t *testing.T) {
 		{"24", 23},
 		{"bar", 24},
 		{"Bar", 24},
+		{"25", 24}, // Numeric bar (MAT format)
 		{"off", -1},
 		{"Off", -1},
+		{"0", -1},     // Numeric off/bearoff (MAT format)
 		{"13*", 12},   // Hit marker should be stripped
 		{"16(2)", 15}, // Multiplier suffix should be stripped
 		{"4(3)", 3},   // Multiplier suffix should be stripped

@@ -307,3 +307,41 @@ func TestSplitMoveLine(t *testing.T) {
 		})
 	}
 }
+
+// TestParseMATMoneyGame verifies a money session — written "0 point match" —
+// parses as a valid match with MatchLength 0, rather than being rejected as a
+// missing header. Regression test for the header guard that treated 0 as "no
+// header found".
+func TestParseMATMoneyGame(t *testing.T) {
+	matContent := ` 0 point match
+
+ Game 1
+ Player1 : 0                   Player2 : 0
+  1)                             41: 13/9 24/23 
+  2) 31: 6/5 8/5                 41: 6/5 9/5 
+                                  Wins 1 point
+`
+
+	match, err := ParseMAT(strings.NewReader(matContent))
+	if err != nil {
+		t.Fatalf("money game should parse, got error: %v", err)
+	}
+	if match.Metadata.MatchLength != 0 {
+		t.Errorf("expected match length 0 (money game), got %d", match.Metadata.MatchLength)
+	}
+	if len(match.Games) != 1 {
+		t.Fatalf("expected 1 game, got %d", len(match.Games))
+	}
+}
+
+// TestParseMATNoHeaderStillErrors confirms the guard still rejects a file with
+// no "N point match" header at all.
+func TestParseMATNoHeaderStillErrors(t *testing.T) {
+	matContent := ` Game 1
+ Player1 : 0                   Player2 : 0
+  1) 31: 6/5 8/5                 41: 6/5 9/5 
+`
+	if _, err := ParseMAT(strings.NewReader(matContent)); err == nil {
+		t.Fatal("expected an error when no match header is present")
+	}
+}

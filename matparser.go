@@ -112,6 +112,7 @@ func (p *MATParser) parse() (*Match, error) {
 
 	// Parse comments and match header
 	matchLength := 0
+	headerFound := false
 	for {
 		line, ok := p.nextLine()
 		if !ok {
@@ -129,11 +130,14 @@ func (p *MATParser) parse() (*Match, error) {
 			length, _ := strconv.Atoi(matches[1])
 			matchLength = length
 			match.Metadata.MatchLength = length
+			headerFound = true
 			break
 		}
 	}
 
-	if matchLength == 0 {
+	// A money session is written "0 point match", so 0 is a valid length — the
+	// header presence, not its value, is what tells us the file was well formed.
+	if !headerFound {
 		return nil, fmt.Errorf("invalid MAT file: no match header found")
 	}
 

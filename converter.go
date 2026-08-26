@@ -2,6 +2,7 @@ package gnubgparser
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -273,12 +274,14 @@ func processNode(node *SGFNode, game *Game) error {
 		}
 		mr.Dice[0], _ = strconv.Atoi(string(di[0]))
 		mr.Dice[1], _ = strconv.Atoi(string(di[1]))
-		game.Moves = append(game.Moves, mr)
 
-		// Check for luck rating
+		// Parse the luck BEFORE appending: append copies the record, so a
+		// value written afterwards would land on a local copy nobody reads.
 		if hasProperty(node, "LU") {
 			parseLuck(node, &mr)
 		}
+
+		game.Moves = append(game.Moves, mr)
 	}
 
 	// Check for player on roll (PL property)
@@ -642,8 +645,16 @@ func parseCubeAnalysis(node *SGFNode, mr *MoveRecord) {
 	mr.CubeAnalysis = ca
 }
 
-// parseLuck parses luck rating (LU property)
-// Format: LU[rating value]
+// parseLuck parses the luck of a roll (LU property).
+//
+// Format: LU[value] — a single float, e.g. LU[-0.00537]. That is what gnuBG
+// writes (WriteLuck, gnubg/sgf.c), and the luck classification it shows in the
+// UI ("lucky", "very unlucky") is not part of this property: gnuBG records it
+// separately as GB/GW. Requiring a rating word in front of the value here made
+// every real file parse as "no luck at all".
+//
+// A two-field form is still accepted, so a file written by some other producer
+// as "rating value" keeps working.
 func parseLuck(node *SGFNode, mr *MoveRecord) {
 	luStr := getProperty(node, "LU")
 	if luStr == "" {
@@ -651,14 +662,28 @@ func parseLuck(node *SGFNode, mr *MoveRecord) {
 	}
 
 	parts := strings.Fields(luStr)
-	if len(parts) < 2 {
+	if len(parts) == 0 {
 		return
 	}
 
-	mr.Luck = &LuckRating{
-		Rating: parts[0],
+	// The value is the last field; anything before it is a rating word.
+	value, err := strconv.ParseFloat(parts[len(parts)-1], 64)
+	if err != nil {
+		return
 	}
-	mr.Luck.Value, _ = strconv.ParseFloat(parts[1], 64)
+
+	// gnuBG writes LU[-inf] for a roll whose luck it never computed (ERR_VAL),
+	// and Go parses that happily as -Inf. Reporting it as a number would hand
+	// callers an infinity to average, so it counts as no luck at all.
+	if math.IsInf(value, 0) || math.IsNaN(value) {
+		return
+	}
+
+	luck := &LuckRating{Value: value}
+	if len(parts) > 1 {
+		luck.Rating = parts[len(parts)-2]
+	}
+	mr.Luck = luck
 }
 
 // parseSkill parses skill rating (SK property)

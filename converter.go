@@ -365,9 +365,13 @@ func processMove(node *SGFNode, game *Game, player int, moveStr string, comment 
 					Player2GammonRate:     mr.CubeAnalysis.Player2GammonRate,
 					Player2BackgammonRate: mr.CubeAnalysis.Player2BackgammonRate,
 					AnalysisDepth:         mr.CubeAnalysis.AnalysisDepth,
+					AnalysisDepthKnown:    mr.CubeAnalysis.AnalysisDepthKnown,
+					Cubeful:               mr.CubeAnalysis.Cubeful,
+					EvalType:              mr.CubeAnalysis.EvalType,
 				},
 			},
-			SelectedMove: 0,
+			SelectedMove:  0,
+			FormatVersion: mr.CubeAnalysis.FormatVersion,
 		}
 	}
 
@@ -462,10 +466,35 @@ func processSetBoard(node *SGFNode, game *Game, comment string) error {
 	return nil
 }
 
-// parseMoveAnalysis parses move analysis (A property)
-// Format: A[ply][move rating ver version player1_win player1_gammon player1_bg player2_win player2_gammon equity ...]
-// Example: A[0][lpab E ver 3 0.496365 0.140890 0.006297 0.135264 0.005951 -0.004723 ...]
-// The probabilities come BEFORE equity in the format
+// parseMoveAnalysis parses move analysis (A property).
+//
+// gnuBG writes it in WriteMoveAnalysis (gnubg/sgf.c) as one leading value followed
+// by one value per evaluated move:
+//
+//	A[<iMove>][<move> E ver <VER> <5 probs> <equity> <nPlies>[C] <0> <fDeterministic> <rNoise> <fUsePrune>]…
+//
+// The leading <iMove> is `pmr->n.iMove`: the rank, in the evaluated move list, of
+// the move actually played. It is NOT a ply — it reaches 11 in real files — and it
+// is reported as MoveAnalysis.SelectedMove.
+//
+// Each option's ply sits at the end of that option, in its evalcontext, at index
+// [10]; the <0> at [11] is a reduced-evaluation flag gnuBG still writes and
+// discards. Options evaluated at different depths in the same decision are normal:
+// move filters evaluate the candidate list at 0-ply and the survivors deeper.
+//
+// Field indices per option (0-based):
+//
+//	[0]  = encoded move
+//	[1]  = evaluation kind: "E" static eval, "X"/"R" rollout
+//	[2]  = literal "ver"
+//	[3]  = SGF analysis-record format version — NOT a ply
+//	[4]  = OUTPUT_WIN               (player's total win probability)
+//	[5]  = OUTPUT_WINGAMMON         (player wins gammon)
+//	[6]  = OUTPUT_WINBACKGAMMON     (player wins backgammon)
+//	[7]  = OUTPUT_LOSEGAMMON        (opponent wins gammon)
+//	[8]  = OUTPUT_LOSEBACKGAMMON    (opponent wins backgammon)
+//	[9]  = rScore (equity)
+//	[10] = evalcontext: ply count, with a trailing 'C' when cubeful
 func parseMoveAnalysis(node *SGFNode, mr *MoveRecord) {
 	analysisStrs := node.Properties["A"]
 	if len(analysisStrs) == 0 {
@@ -476,15 +505,10 @@ func parseMoveAnalysis(node *SGFNode, mr *MoveRecord) {
 		Moves: make([]MoveOption, 0),
 	}
 
-	// Parse ply depth from first element (if it's a single number)
-	plyDepth := 0
-	if len(analysisStrs) > 0 {
-		plyStr := strings.TrimSpace(analysisStrs[0])
-		if depth, err := strconv.Atoi(plyStr); err == nil {
-			// First element is the ply depth, remove it from the list
-			plyDepth = depth
-			analysisStrs = analysisStrs[1:]
-		}
+	// The first value is the index of the move actually played, not a ply.
+	if selected, err := strconv.Atoi(strings.TrimSpace(analysisStrs[0])); err == nil {
+		mr.Analysis.SelectedMove = selected
+		analysisStrs = analysisStrs[1:]
 	}
 
 	// Parse each move option
@@ -494,23 +518,23 @@ func parseMoveAnalysis(node *SGFNode, mr *MoveRecord) {
 			continue
 		}
 
-		opt := MoveOption{}
+		opt := MoveOption{EvalType: parts[1]}
 
 		// Move encoding at parts[0]
 		if len(parts[0]) >= 2 {
 			parseEncodedMoveOption(parts[0], &opt)
 		}
 
-		// Format: parts[0]=move, parts[1]=rating(E/G/VB), parts[2]=ver, parts[3]=version
-		// Then from GNU Backgammon source (sgf.c):
-		// arEvalMove[0] arEvalMove[1] arEvalMove[2] arEvalMove[3] arEvalMove[4] rScore ...
-		// Where arEvalMove indices are:
-		//   0 = OUTPUT_WIN (player's total win probability)
-		//   1 = OUTPUT_WINGAMMON (player wins gammon)
-		//   2 = OUTPUT_WINBACKGAMMON (player wins backgammon)
-		//   3 = OUTPUT_LOSEGAMMON (opponent wins gammon)
-		//   4 = OUTPUT_LOSEBACKGAMMON (opponent wins backgammon)
-		// And rScore = equity
+		if ver, err := parseFormatVersion(parts[2:]); err == nil {
+			mr.Analysis.FormatVersion = ver
+		}
+
+		// A rollout option has a different payload from index [1] on; keep the move
+		// and say the rest is unknown rather than reading "Trials" as a probability.
+		if opt.EvalType != EvalTypeEval {
+			mr.Analysis.Moves = append(mr.Analysis.Moves, opt)
+			continue
+		}
 
 		opt.Player1WinRate, _ = parseFloat32(parts[4])        // OUTPUT_WIN
 		opt.Player1GammonRate, _ = parseFloat32(parts[5])     // OUTPUT_WINGAMMON
@@ -522,8 +546,14 @@ func parseMoveAnalysis(node *SGFNode, mr *MoveRecord) {
 		// Player2 win rate is calculated as 1.0 - Player1 win rate
 		opt.Player2WinRate = 1.0 - opt.Player1WinRate
 
-		// Set the ply depth from the first element
-		opt.AnalysisDepth = plyDepth
+		// The ply of this option, from its own evalcontext.
+		if len(parts) > 10 {
+			if ec, err := parsePlyToken(parts[10]); err == nil {
+				opt.AnalysisDepth = ec.Plies
+				opt.Cubeful = ec.Cubeful
+				opt.AnalysisDepthKnown = true
+			}
+		}
 
 		mr.Analysis.Moves = append(mr.Analysis.Moves, opt)
 	}
@@ -548,33 +578,38 @@ func parseEncodedMoveOption(encoded string, opt *MoveOption) {
 	opt.MoveString = FormatMove(opt.Move, 0) // Player doesn't matter for display
 }
 
-// parseCubeAnalysis parses cube decision analysis (DA property)
+// parseCubeAnalysis parses cube decision analysis (DA property).
 //
-// GNUbg DA property format (21 fields for cube analysis):
+// gnuBG writes the property in WriteDoubleAnalysis (gnubg/sgf.c). For a static
+// evaluation (EVAL_EVAL) the payload is:
 //
-//	DA[rating ver version cubelevel bestaction skill matchlength
-//	    p_win p_wingammon p_winbg p_losegammon p_losebg cubeless_equity cubeful_nd_equity
-//	    p_win p_wingammon p_winbg p_losegammon p_losebg cubeless_equity cubeful_dt_equity]
+//	DA[E ver <VER> <nPlies>[C] <fDeterministic> <rNoise> <fUsePrune> <aarOutput[2][7]>]
 //
-// Field indices (0-based after splitting):
+// Field indices (0-based, after splitting on whitespace, for VER >= 3):
 //
-//	[0]  = skill rating (E, G, etc)
-//	[1]  = "ver"
-//	[2]  = version number (analysis depth / ply)
-//	[3]  = cube level (e.g., "2C")
-//	[4]  = best cube action index
-//	[5]  = error value
-//	[6]  = match length
-//	[7]  = P(player wins)
-//	[8]  = P(player wins gammon)
-//	[9]  = P(player wins backgammon)
-//	[10] = P(opponent wins gammon)
-//	[11] = P(opponent wins backgammon)
-//	[12] = cubeless equity (EMG)
-//	[13] = cubeful no-double equity
-//	[14-18] = same probabilities repeated
-//	[19] = same cubeless equity repeated
-//	[20] = cubeful double/take equity
+//	[0]  = evaluation kind: "E" static eval, "X"/"R" rollout
+//	[1]  = literal "ver"
+//	[2]  = SGF analysis-record format version — NOT a ply (see SGFAnalysisFormatVersion)
+//	[3]  = evalcontext: ply count, with a trailing 'C' when cubeful ("2C" = 2-ply cubeful)
+//	[4]  = evalcontext: fDeterministic
+//	[5]  = evalcontext: rNoise
+//	[6]  = evalcontext: fUsePrune
+//	[7]  = P(player wins)                  ] no-double branch,
+//	[8]  = P(player wins gammon)           ] gnuBG's aarOutput[0][0..6]
+//	[9]  = P(player wins backgammon)       ]
+//	[10] = P(opponent wins gammon)         ]
+//	[11] = P(opponent wins backgammon)     ]
+//	[12] = cubeless equity (EMG)           ]
+//	[13] = cubeful no-double equity        ]
+//	[14-20] = the same seven fields for the double/take branch (aarOutput[1])
+//
+// Format version 2 inserts one extra token (a reduced-evaluation flag, dropped in
+// version 3) between the ply and fDeterministic, which shifts the floats by one.
+//
+// A rollout cube analysis has an entirely different payload
+// ("X ver <VER> Eq Trials <n> NoDouble Output …"), carries no evalcontext, and is
+// therefore reported with AnalysisDepthKnown = false and no probabilities rather
+// than being force-fitted into the layout above.
 //
 // Note: In match play, cubeful equities are Match Winning Chances (MWC, 0.0-1.0).
 // Double/Pass equity is not stored in the DA property; it equals 1.0 for money games,
@@ -591,23 +626,51 @@ func parseCubeAnalysis(node *SGFNode, mr *MoveRecord) {
 	}
 
 	parts := strings.Fields(daStrs[0])
-	if len(parts) < 13 {
+	if len(parts) < 3 {
 		return
 	}
 
-	ca := &CubeAnalysis{}
+	ca := &CubeAnalysis{EvalType: parts[0]}
 
-	// Probabilities at indices 7-11 (GNUbg eval.h order):
-	//   [7]  = P(player wins)
-	//   [8]  = P(player wins gammon)
-	//   [9]  = P(player wins backgammon)
-	//   [10] = P(opponent wins gammon)
-	//   [11] = P(opponent wins backgammon)
-	pWin, _ := parseFloat32(parts[7])
-	pWinGammon, _ := parseFloat32(parts[8])
-	pWinBG, _ := parseFloat32(parts[9])
-	pLoseGammon, _ := parseFloat32(parts[10])
-	pLoseBG, _ := parseFloat32(parts[11])
+	// "ver <n>" is the record format version, never a search depth.
+	ver, err := parseFormatVersion(parts[1:])
+	if err != nil {
+		// Without a readable version the field layout is unknown; do not guess.
+		mr.CubeAnalysis = ca
+		return
+	}
+	ca.FormatVersion = ver
+
+	// Only a static evaluation carries an evalcontext, and only versions 2 and 3
+	// have a layout this parser knows. Anything else keeps EvalType/FormatVersion
+	// and an explicitly unknown depth.
+	if ca.EvalType != EvalTypeEval || (ver != 2 && ver != SGFAnalysisFormatVersion) {
+		mr.CubeAnalysis = ca
+		return
+	}
+
+	// First float of the no-double branch. Version 2 carries one extra
+	// (reduced-evaluation) token inside the evalcontext.
+	base := 7
+	if ver == 2 {
+		base = 8
+	}
+	if len(parts) < base+6 {
+		mr.CubeAnalysis = ca
+		return
+	}
+
+	if ec, err := parsePlyToken(parts[3]); err == nil {
+		ca.AnalysisDepth = ec.Plies
+		ca.Cubeful = ec.Cubeful
+		ca.AnalysisDepthKnown = true
+	}
+
+	pWin, _ := parseFloat32(parts[base])
+	pWinGammon, _ := parseFloat32(parts[base+1])
+	pWinBG, _ := parseFloat32(parts[base+2])
+	pLoseGammon, _ := parseFloat32(parts[base+3])
+	pLoseBG, _ := parseFloat32(parts[base+4])
 
 	ca.Player1WinRate = pWin
 	ca.Player1GammonRate = pWinGammon
@@ -616,26 +679,22 @@ func parseCubeAnalysis(node *SGFNode, mr *MoveRecord) {
 	ca.Player2GammonRate = pLoseGammon
 	ca.Player2BackgammonRate = pLoseBG
 
-	// Cubeless equity at index 12
-	ca.CubelessEquity, _ = strconv.ParseFloat(parts[12], 64)
+	ca.CubelessEquity, _ = strconv.ParseFloat(parts[base+5], 64)
 
-	// Cubeful No-Double equity at index 13
-	if len(parts) >= 14 {
-		ca.CubefulNoDouble, _ = strconv.ParseFloat(parts[13], 64)
+	// Cubeful No-Double equity closes the no-double branch.
+	if len(parts) > base+6 {
+		ca.CubefulNoDouble, _ = strconv.ParseFloat(parts[base+6], 64)
 	}
 
-	// Cubeful Double/Take equity at index 20 (second set's cubeful equity)
-	if len(parts) >= 21 {
-		ca.CubefulDoubleTake, _ = strconv.ParseFloat(parts[20], 64)
+	// Cubeful Double/Take equity closes the double/take branch.
+	if len(parts) > base+13 {
+		ca.CubefulDoubleTake, _ = strconv.ParseFloat(parts[base+13], 64)
 	}
 
 	// Double/Pass equity: +1.0 for money games (normalized per cube value).
 	// For match play, this should ideally be computed from the match equity table,
 	// but +1.0 is the standard GNUbg convention for the DA property.
 	ca.CubefulDoublePass = 1.0
-
-	// Set analysis depth from parts[2] if it's numeric
-	ca.AnalysisDepth, _ = strconv.Atoi(parts[2])
 
 	// BestAction is NOT computed here because in match play the cubeful equities
 	// (ND and DT) are stored as MWC (Match Winning Chances, 0.0-1.0) while DP is

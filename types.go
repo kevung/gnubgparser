@@ -106,8 +106,12 @@ type Position struct {
 type MoveAnalysis struct {
 	// Top moves evaluated
 	Moves []MoveOption `json:"moves"`
-	// Selected move index (in Moves array)
+	// Selected move index (in Moves array). This is gnuBG's A[n] leading value —
+	// the rank of the move actually played in the evaluated move list.
 	SelectedMove int `json:"selected_move"`
+	// FormatVersion is the SGF analysis-record format version ("ver 3"), not a ply.
+	// See SGFAnalysisFormatVersion.
+	FormatVersion int `json:"format_version,omitempty"`
 }
 
 // MoveOption represents one possible move with evaluation
@@ -121,7 +125,19 @@ type MoveOption struct {
 	Player2WinRate        float32 `json:"player2_win_rate"`
 	Player2GammonRate     float32 `json:"player2_gammon_rate"`
 	Player2BackgammonRate float32 `json:"player2_backgammon_rate"`
-	AnalysisDepth         int     `json:"analysis_depth"` // Ply depth (0=book)
+	// AnalysisDepth is the search depth in plies of this option's evaluation,
+	// read from the evalcontext gnuBG appends to the option. It is only meaningful
+	// when AnalysisDepthKnown is true: 0 is a real gnuBG depth (0-ply), so it can
+	// never double as "unknown".
+	AnalysisDepth int `json:"analysis_depth"`
+	// AnalysisDepthKnown reports whether AnalysisDepth was actually read from the
+	// file. It is false for rollout options and for truncated records.
+	AnalysisDepthKnown bool `json:"analysis_depth_known"`
+	// Cubeful reports the evalcontext's cubeful flag (the 'C' in gnuBG's "2C").
+	Cubeful bool `json:"cubeful,omitempty"`
+	// EvalType is the kind of evaluation gnuBG recorded: EvalTypeEval,
+	// EvalTypeRollout or EvalTypeRolloutLegacy.
+	EvalType string `json:"eval_type,omitempty"`
 }
 
 // CubeAnalysis contains analysis for cube decisions
@@ -141,7 +157,22 @@ type CubeAnalysis struct {
 	// Decision analysis
 	BestAction           string  `json:"best_action"` // "double", "no_double", "take", "pass"
 	WrongPassTakePercent float32 `json:"wrong_pass_take_percent,omitempty"`
-	AnalysisDepth        int     `json:"analysis_depth"`
+	// AnalysisDepth is the search depth in plies of the cube evaluation, read from
+	// the evalcontext gnuBG serialises inside DA[]. Only meaningful when
+	// AnalysisDepthKnown is true — 0 is a real gnuBG depth (0-ply).
+	AnalysisDepth int `json:"analysis_depth"`
+	// AnalysisDepthKnown reports whether AnalysisDepth was actually read from the
+	// file. It is false for rollout cube analyses, which carry no evalcontext, and
+	// for records this parser declines to decode.
+	AnalysisDepthKnown bool `json:"analysis_depth_known"`
+	// Cubeful reports the evalcontext's cubeful flag (the 'C' in gnuBG's "2C").
+	Cubeful bool `json:"cubeful,omitempty"`
+	// EvalType is the kind of evaluation gnuBG recorded: EvalTypeEval,
+	// EvalTypeRollout or EvalTypeRolloutLegacy.
+	EvalType string `json:"eval_type,omitempty"`
+	// FormatVersion is the SGF analysis-record format version ("ver 3"), not a ply.
+	// See SGFAnalysisFormatVersion.
+	FormatVersion int `json:"format_version,omitempty"`
 }
 
 // LuckRating represents luck analysis for a roll

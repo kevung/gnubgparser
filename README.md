@@ -136,4 +136,9 @@ This project is inspired by [xgparser](https://github.com/kevung/xgparser) which
 
 ## License
 
-LGPL-2.1 (matching gnuBG's license)
+MIT (see `LICENSE`).
+
+This is an independent implementation of the gnuBG SGF and Jellyfish MAT file
+formats. It contains no gnuBG code: the formats were read from their public
+description and from sample files, and a file format is not itself
+copyrightable.

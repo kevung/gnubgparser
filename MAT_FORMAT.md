@@ -42,7 +42,12 @@ Jellyfish MAT files are text-based match files with a simple, human-readable for
   - `Doubles => N` (offer double to N)
   - `Takes` (accept double)
   - `Drops` (decline double)
-- Game result: `Wins N points`
+- Game result: `Wins N points`, in the winner's column — on a move line, or on
+  its own line indented 6 spaces (left player) or 34 (right player). A line on
+  its own is attributed by that indentation, not by the last player to act.
+  After `Drops` the doubler wins the cube's value before the offer.
+- A dice-only cell (`51:`) is a dance; `???` is a play the record does not carry
+  (`MoveRecord.Unrecorded`).
 
 ### Point Notation
 - Points numbered 1-24 (standard backgammon notation)
@@ -144,6 +149,7 @@ type MoveRecord struct {
     Move       [8]int    // Encoded move
     MoveString string    // Human-readable (e.g., "13/9 24/23")
     CubeValue  int       // For doubles
+    Unrecorded bool      // "???" cell: played, but not written down
     // ... other fields
 }
 ```

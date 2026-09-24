@@ -247,10 +247,10 @@ func (p *MATParser) parseGame(matchLength int, match *Match) (*Game, error) {
 	}
 
 	// Parse moves
-	currentPlayer := 1 // Start with player 2 (1-indexed in MAT format)
-	cubeValue := 1
-	_ = cubeValue // Will be used for cube tracking in future
+	cubeValue := 1   // the cube's value once taken
+	offeredCube := 2 // the value the last "Doubles => N" offered
 	gameEnded := false
+	winsRead := false
 
 	for {
 		line, ok := p.nextLine()
@@ -258,12 +258,13 @@ func (p *MATParser) parseGame(matchLength int, match *Match) (*Game, error) {
 			break
 		}
 
-		// Check for wins line (end of game)
-		// "Wins" can appear standalone or on the right side of a move line
+		// A "Wins" line standing on its own ends the game. gnubg indents it in
+		// the WINNER's column, which is not always the column of the last cell
+		// written: a player who rolls and resigns leaves his own dice last.
 		if matches := winsLineRe.FindStringSubmatch(line); matches != nil {
 			points, _ := strconv.Atoi(matches[1])
 			game.Points = points
-			game.Winner = currentPlayer
+			game.Winner = winsLineColumn(line)
 			break
 		}
 
@@ -299,6 +300,7 @@ func (p *MATParser) parseGame(matchLength int, match *Match) (*Game, error) {
 					game.Points = points
 					game.Winner = player
 					gameEnded = true
+					winsRead = true
 					break
 				}
 
@@ -311,7 +313,7 @@ func (p *MATParser) parseGame(matchLength int, match *Match) (*Game, error) {
 						CubeValue: newCube,
 					}
 					game.Moves = append(game.Moves, move)
-					currentPlayer = player
+					offeredCube = newCube
 					continue
 				}
 
@@ -321,8 +323,7 @@ func (p *MATParser) parseGame(matchLength int, match *Match) (*Game, error) {
 						Player: player,
 					}
 					game.Moves = append(game.Moves, move)
-					cubeValue *= 2
-					currentPlayer = player
+					cubeValue = offeredCube
 					continue
 				}
 
@@ -332,11 +333,14 @@ func (p *MATParser) parseGame(matchLength int, match *Match) (*Game, error) {
 						Player: player,
 					}
 					game.Moves = append(game.Moves, move)
-					// Game ends on a drop
+					// A refused double ends the game: the doubler wins the
+					// cube as it stood before the offer. The "Wins" gnubg
+					// writes after it says the same, in the next column or
+					// on the next line; keep reading so it is not skipped.
 					game.Winner = 1 - player
-					currentPlayer = 1 - player
+					game.Points = cubeValue
 					gameEnded = true
-					break
+					continue
 				}
 
 				// Check for dice and move
@@ -351,20 +355,75 @@ func (p *MATParser) parseGame(matchLength int, match *Match) (*Game, error) {
 						Dice:       [2]int{die1, die2},
 						MoveString: moveStr,
 						Move:       parseMatMove(moveStr), // Always parse; empty string returns all -1 (no move)
+						Unrecorded: isUnrecordedMove(moveStr),
 					}
 
 					game.Moves = append(game.Moves, move)
-					currentPlayer = player
 				}
 			}
 		}
 
 		if gameEnded {
+			if !winsRead {
+				p.readWinsAfterDrop(game)
+			}
 			break
 		}
 	}
 
 	return game, nil
+}
+
+// readWinsAfterDrop consumes the "Wins" line gnubg writes on its own after a
+// drop in the right column, so that it is neither lost nor mistaken for the
+// start of the next game. Anything else is pushed back.
+func (p *MATParser) readWinsAfterDrop(game *Game) {
+	for {
+		line, ok := p.nextLine()
+		if !ok {
+			return
+		}
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if m := winsLineRe.FindStringSubmatch(line); m != nil {
+			points, _ := strconv.Atoi(m[1])
+			game.Points = points
+			game.Winner = winsLineColumn(line)
+			return
+		}
+		p.unreadLine(line)
+		return
+	}
+}
+
+// winsLineColumn says whose column a "Wins" line standing on its own is in:
+// gnubg indents it 6 columns for the left player and 34 for the right one,
+// whose moves start at column 33 of a numbered line. Tabs count to the next
+// multiple of 8.
+func winsLineColumn(line string) int {
+	width := 0
+	for _, r := range line {
+		switch r {
+		case ' ':
+			width++
+		case '\t':
+			width += 8 - width%8
+		default:
+			if width >= 20 {
+				return 1
+			}
+			return 0
+		}
+	}
+	return 0
+}
+
+// isUnrecordedMove reports a cell that says a play was made without saying
+// which: "???" (sometimes "????"), as XG writes it for a roll followed by a
+// resignation. A cell holding the dice alone is a dance, not this.
+func isUnrecordedMove(moveStr string) bool {
+	return strings.HasPrefix(moveStr, "???") && strings.Trim(moveStr, "?") == ""
 }
 
 // splitMoveLine splits a move line into left (player1) and right (player2) parts

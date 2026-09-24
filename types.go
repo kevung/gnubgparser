@@ -58,11 +58,16 @@ type Game struct {
 
 // MoveRecord represents a single move, cube decision, or game event
 type MoveRecord struct {
-	Type         MoveType      `json:"type"`
-	Player       int           `json:"player"` // 0 or 1
-	Dice         [2]int        `json:"dice,omitempty"`
-	Move         [8]int        `json:"move,omitempty"`          // Encoded move (gnuBG format)
-	MoveString   string        `json:"move_string,omitempty"`   // Human-readable move
+	Type       MoveType `json:"type"`
+	Player     int      `json:"player"` // 0 or 1
+	Dice       [2]int   `json:"dice,omitempty"`
+	Move       [8]int   `json:"move,omitempty"`        // Encoded move (gnuBG format)
+	MoveString string   `json:"move_string,omitempty"` // Human-readable move
+	// Unrecorded is true when the file says a play was made without saying which:
+	// a .mat cell written "???" (XG writes it when a player rolled and resigned).
+	// Move is all -1 then, as for a dance; a dance is a cell holding the dice alone,
+	// and leaves Unrecorded false. Only the MAT parser sets it.
+	Unrecorded   bool          `json:"unrecorded,omitempty"`
 	CubeValue    int           `json:"cube_value,omitempty"`    // For SETCUBEVAL
 	CubeOwner    int           `json:"cube_owner,omitempty"`    // For SETCUBEPOS (-1=center, 0=p1, 1=p2)
 	Position     *Position     `json:"position,omitempty"`      // For SETBOARD

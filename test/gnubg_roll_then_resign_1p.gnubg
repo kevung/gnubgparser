@@ -1,0 +1,11 @@
+set rng mersenne
+set seed 11
+set player 0 gnubg
+set player 1 human
+set automatic roll off
+set display off
+new match 1
+move 24/18 13/11
+roll
+resign normal
+export match mat test/gnubg_roll_then_resign_1p.mat

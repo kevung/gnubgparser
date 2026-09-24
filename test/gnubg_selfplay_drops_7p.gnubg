@@ -1,0 +1,11 @@
+set rng mersenne
+set seed 7
+set player 0 gnubg
+set player 1 gnubg
+set player 0 chequerplay evaluation plies 0
+set player 1 chequerplay evaluation plies 0
+set player 0 cubedecision evaluation plies 0
+set player 1 cubedecision evaluation plies 0
+set display off
+new match 7
+export match mat test/gnubg_selfplay_drops_7p.mat

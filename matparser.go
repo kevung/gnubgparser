@@ -517,19 +517,28 @@ func parseMatMove(moveStr string) [8]int {
 			}
 		}
 
-		// Parse "from/to" format
+		// A token "a/b/c" is a chain of steps a/b, b/c, ...; '*' may mark any segment.
 		moveparts := strings.Split(cleanPart, "/")
-		if len(moveparts) != 2 {
+		if len(moveparts) < 2 {
+			continue
+		}
+		points := make([]int, len(moveparts))
+		valid := true
+		for i, seg := range moveparts {
+			points[i] = parseMatPoint(seg)
+			if (i == 0 && points[i] < 0) || points[i] < -1 {
+				valid = false
+				break
+			}
+		}
+		if !valid {
 			continue
 		}
 
-		from := parseMatPoint(moveparts[0])
-		to := parseMatPoint(moveparts[1])
-
-		if from >= 0 && to >= -1 {
-			for r := 0; r < multiplier && idx < 8; r++ {
-				move[idx] = from
-				move[idx+1] = to
+		for r := 0; r < multiplier && idx < 8; r++ {
+			for i := 0; i+1 < len(points) && idx < 8; i++ {
+				move[idx] = points[i]
+				move[idx+1] = points[i+1]
 				idx += 2
 			}
 		}

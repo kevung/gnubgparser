@@ -345,3 +345,26 @@ func TestParseMATNoHeaderStillErrors(t *testing.T) {
 		t.Fatal("expected an error when no match header is present")
 	}
 }
+
+func TestParseMatMoveCompoundSteps(t *testing.T) {
+	tests := []struct {
+		in   string
+		want [8]int
+	}{
+		{"24/18*/14", [8]int{23, 17, 17, 13, -1, -1, -1, -1}},
+		{"bar/20*/14", [8]int{24, 19, 19, 13, -1, -1, -1, -1}},
+		{"6/2*/off", [8]int{5, 1, 1, -1, -1, -1, -1, -1}},
+		{"24/20*/16/12", [8]int{23, 19, 19, 15, 15, 11, -1, -1}},
+		{"24/20/16*/12*", [8]int{23, 19, 19, 15, 15, 11, -1, -1}},
+		{"24/20*/16/12 6/2", [8]int{23, 19, 19, 15, 15, 11, 5, 1}},
+		{"24/20*/16/12 13/9*/5 6/2", [8]int{23, 19, 19, 15, 15, 11, 12, 8}},
+		{"24/18*/14(2)", [8]int{23, 17, 17, 13, 23, 17, 17, 13}},
+		{"24/18/x", [8]int{-1, -1, -1, -1, -1, -1, -1, -1}},
+		{"24/18*", [8]int{23, 17, -1, -1, -1, -1, -1, -1}},
+	}
+	for _, tt := range tests {
+		if got := parseMatMove(tt.in); got != tt.want {
+			t.Errorf("parseMatMove(%q) = %v, want %v", tt.in, got, tt.want)
+		}
+	}
+}
